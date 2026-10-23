@@ -1,0 +1,451 @@
+{{/*
+  ==========================================================================================================================
+  gitea-board-badges — footer.tmpl
+  ==========================================================================================================================
+
+  WHAT THIS DOES
+  --------------
+  Gitea (our self-hosted Git server) has project boards: kanban boards with columns such as "To Do", "In Progress" and
+  "Done", on which issues and pull requests are placed as cards. Gitea's own issue list, however, does not show in which
+  column an issue currently is. This file adds that, in two ways:
+
+    1. Badges: next to the title of every issue / pull request in a list, a coloured label with the name of its board
+       column (in the colour of that column on the board). Clicking the label opens the board.
+    2. Filter: a "Status" dropdown in Gitea's filter bar (next to Label, Milestone, Project, Author ...). Choosing a
+       status shows every item of the whole list that is in that column, across all pages of the list. "No board"
+       shows the items that are on no board.
+
+  It works on every page that has an issue list: the issue and pull request lists of a repository, and the global
+  "/issues" overview, which can mix issues from several repositories.
+
+  HOW IT GETS INTO GITEA
+  ----------------------
+  Gitea has no plugin system, but it lets administrators add their own templates. Gitea includes the template
+  "custom/footer.tmpl" at the bottom of every page it renders. This file is placed (or mounted read-only, with Docker) at
+  $GITEA_CUSTOM/templates/custom/footer.tmpl; in the official Docker image that is /data/gitea/templates/custom/footer.tmpl.
+  Gitea reads templates only when it starts, so after a change Gitea has to be restarted. See README.md.
+
+  This block is a Go template comment: Gitea removes it before sending the page, so this explanation costs the visitor
+  nothing. Everything below it (the <script>) is sent to the browser and runs there.
+
+  HOW IT WORKS (SHORT VERSION)
+  ----------------------------
+    a. Find the issue list on the page. No list: do nothing.
+    b. For the items on the current page: download the project boards of their repository, read which issue is in
+       which column, and add the badges. This happens right away, so the badges appear quickly.
+    c. At the same time, if the list has more than one page: download the other pages of the same list (with the same
+       Gitea filters and sorting), add their items to the list, hidden, and give them badges too.
+    d. When everything is loaded, build the "Status" dropdown and apply the filter from the URL, if any.
+         - no status chosen: the list looks exactly like Gitea's own page, with Gitea's page buttons;
+         - a status chosen: all items of the whole list with that status are shown, in Gitea's order, and Gitea's page
+           buttons are hidden, because they would no longer match what is shown.
+
+  DESIGN CHOICES
+  --------------
+  * Read-only and private. The script only reads pages the visitor can already see, with the visitor's own login and
+    permissions. It never changes anything in Gitea and sends nothing outside our Gitea server.
+  * Board pages instead of the API. Gitea's REST API does have endpoints for boards, but it does not accept the normal
+    browser login (it answers 404 for private repositories), only API tokens. The board web pages do work with the
+    browser login, so the script downloads those and reads the HTML.
+  * Whole list, by reading Gitea's own list pages. To filter the whole list, the script downloads the other pages of the
+    list that is open (same address, other "page=" number). That way Gitea's own filters (open/closed, labels, search
+    text, sorting ...) keep applying, and the items look exactly like Gitea's. Each page is one extra request, made one
+    after the other in the background; for safety at most MAX_PAGES pages are read.
+  * Filter in the URL. The chosen status is stored after the "#" in the address (e.g. ".../issues#status=To%20Do").
+    That part of the URL never goes to the server, so Gitea's own filters and paging are not affected, and a filtered
+    list can be bookmarked or shared.
+  * Fails quietly. If Gitea changes its HTML in an update and the script cannot find what it needs, it simply adds
+    nothing; Gitea itself keeps working. Run test/test.sh before a Gitea update to find out in advance.
+
+  GITEA HTML THE SCRIPT DEPENDS ON (check these after a Gitea update)
+  ------------------------------------------------------------------
+    Issue list:   #issue-list > .item          one item (issue or pull request) in the list
+                  a.list-item-large-title      the title link of an item, e.g. /owner/repo/issues/12
+                  .labels-list                 the place where Gitea shows an item's labels; the badge goes there
+                  .page.buttons                Gitea's page buttons under the list (only there when it has more pages)
+                  ?page=N                      the address parameter Gitea uses for page N of a list
+    Filter bar:   .project-filter              Gitea's own "Project" dropdown; ours goes right after it
+                  .list-header-filters         the filter bar on /issues (which has no Project dropdown)
+    Board page:   .project-column              one column; its colour is in style="background: #rrggbb"
+                  .project-column-title-text   the column name
+                  .issue-card                  one card (issue or pull request) in a column
+
+  TEXTS
+  -----
+  The few visible texts are in the TEXTS table at the top of the script, in English and Dutch. The script picks the
+  language the visitor has chosen in Gitea (Gitea puts it in <html lang="...">) and falls back to English. To add a
+  language, add an entry to TEXTS.
+  ==========================================================================================================================
+*/}}
+{{/* The nonce is a random value Gitea generates for every page. Gitea's Content Security Policy only allows inline
+     scripts that carry the right nonce, so without it the browser could refuse to run this script. */}}
+<script nonce="{{ctx.CspScriptNonce}}">
+// Everything is wrapped in a function that runs immediately, so none of our variables leak into the page's global scope
+// and cannot clash with Gitea's own JavaScript.
+(() => {
+  // ---------------------------------------------------------------------------------------------------------------------
+  // a. Is there an issue list on this page?
+  // ---------------------------------------------------------------------------------------------------------------------
+  // This template is included on every Gitea page (code, settings, wiki ...). Only pages with an issue list are relevant;
+  // on all other pages we stop right here, so the script costs practically nothing there.
+  const list = document.querySelector('#issue-list');
+  if (!list) return;
+
+  // If Gitea runs under a sub-path (e.g. https://example.com/git/), every link starts with that path. Gitea exposes it
+  // as window.config.appSubUrl. When Gitea runs at the root of its domain, this is an empty string.
+  const base = (window.config && window.config.appSubUrl) || '';
+
+  // Safety limit for reading the other pages of a long list: at most this many pages (with Gitea's default of 20 items
+  // per page that is 1000 items). Beyond that the filter covers the first MAX_PAGES pages and says so.
+  const MAX_PAGES = 50;
+
+  // The visible texts, per language. Gitea writes the visitor's chosen language into <html lang="..."> (e.g. "en-US",
+  // "nl-NL"); we use the part before the "-" and fall back to English for languages that are not in this table.
+  //   status: the dropdown button without a filter        all:  the entry that removes the filter
+  //   none:   the entry for items that are on no board     header / headerFirst: heading at the top of the open dropdown
+  const TEXTS = {
+    en: {status: 'Status', all: 'All', none: 'No board', header: 'Status on the board (all pages)',
+      headerFirst: (n) => `Status on the board (first ${n} pages)`},
+    nl: {status: 'Status', all: 'Alle', none: 'Geen bord', header: "Status op het bord (alle pagina's)",
+      headerFirst: (n) => `Status op het bord (eerste ${n} pagina's)`},
+  };
+  const T = TEXTS[(document.documentElement.lang || 'en').split('-')[0].toLowerCase()] || TEXTS.en;
+
+  // The filter value used for items that are on no board at all. It is also what the user sees for that entry.
+  const NONE = T.none;
+
+  // Helper: download a Gitea web page and turn its HTML into a document we can search with querySelector, exactly like
+  // the page in the browser. "same-origin" sends the visitor's login cookie along, so we see what the visitor may see.
+  // Returns null when the page cannot be read (e.g. no access), so callers can simply skip it.
+  const page = async (url) => {
+    const r = await fetch(url, {credentials: 'same-origin'});
+    return r.ok ? new DOMParser().parseFromString(await r.text(), 'text/html') : null;
+  };
+
+  // Helper: choose a readable text colour for a given background colour. It computes the perceived brightness of the
+  // colour (the standard weights for red, green and blue) and returns dark text on light colours such as the yellow of
+  // "Done", and white text on dark colours such as the blue of "To Do".
+  const textColor = (hex) => {
+    const n = parseInt(hex.replace('#', ''), 16);   // "#fbca04" -> one number holding red, green and blue
+    const brightness = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255);   // 0 (black) .. 255 (white)
+    return brightness > 150 ? '#1f1f1f' : '#ffffff';
+  };
+
+  // Each item's title links to the issue or pull request, e.g. "/alice/website/issues/12". From that link we take
+  // the owner ("alice"), the repository ("website") and the number (12). Pull requests and issues share one
+  // numbering per repository, so "owner/repo" plus the number identifies an item.
+  const re = new RegExp(`^${base}/([^/]+)/([^/]+)/(?:issues|pulls)/(\\d+)$`);
+  // Returns {repo: "owner/repo", number: 12, id: "/owner/repo/issues/12"} for a row of the list, or null if the row has
+  // no title link we understand (such rows are left alone).
+  const parse = (item) => {
+    const a = item.querySelector('a.list-item-large-title');
+    const path = a && new URL(a.getAttribute('href'), location.href).pathname;
+    const m = path && path.match(re);
+    return m ? {repo: `${m[1]}/${m[2]}`, number: Number(m[3]), id: path} : null;
+  };
+
+  // columns: every column name found on the boards, with its colour, in the order the columns appear on the board
+  // (To Do, In Progress, Done ...). The dropdown is built from this. If two boards have a column with the same name, they
+  // share one entry in the dropdown (the first colour wins).
+  const columns = new Map();
+
+  // ---------------------------------------------------------------------------------------------------------------------
+  // Reading the boards of a repository.
+  // ---------------------------------------------------------------------------------------------------------------------
+  // boards: "owner/repo" -> a promise of what its boards say. Kept so every repository's boards are downloaded only once,
+  // even when its items appear on several pages of the list.
+  const boards = new Map();
+  const boardsOf = (key) => {
+    if (!boards.has(key)) boards.set(key, readBoards(key));
+    return boards.get(key);
+  };
+
+  // Download all open boards of one repository. Returns:
+  //   where:  issue number -> list of {project, column, color, href} (a list, because an issue can be on several boards)
+  //   multi:  true when the repository has more than one board (badges then also show the board's name)
+  const readBoards = async (key) => {
+    const where = new Map();
+    // The page /owner/repo/projects lists the repository's open boards. We only need the links to the boards in it,
+    // which look like /owner/repo/projects/7. A Set removes duplicates (Gitea may link to a board more than once).
+    const overview = await page(`${base}/${key}/projects`);
+    if (!overview) return {where, multi: false};   // projects page not readable (e.g. projects disabled): no badges
+    const boardLink = new RegExp(`^${base}/${key}/projects/\\d+$`);
+    const links = new Set([...overview.querySelectorAll('a[href]')].map((a) => a.getAttribute('href'))
+      .filter((h) => boardLink.test(h)));
+
+    for (const href of links) {
+      // Download one board. Boards are read one after the other (not all at once) to keep the load on Gitea low.
+      const board = await page(href);
+      if (!board) continue;
+      // The board's name is the first part of the page title, e.g. "Roadmap - Projects - ..." -> "Roadmap".
+      const project = (board.querySelector('title')?.textContent || '').split(' - ')[0].trim();
+
+      for (const col of board.querySelectorAll('.project-column')) {
+        // Column name, e.g. "To Do".
+        const column = col.querySelector('.project-column-title-text')?.textContent.trim() || '';
+        // Column colour: Gitea puts it in the column's style attribute as "background: #0052cc". A column without a
+        // colour gets a neutral grey.
+        const color = ((col.getAttribute('style') || '').match(/background:\s*(#[0-9a-fA-F]{6})/) || [])[1] || '#767676';
+        // Remember the column for the dropdown (only the first time we see this name, which keeps the board order).
+        if (column && !columns.has(column)) columns.set(column, {color});
+
+        // Every card in this column links to its issue or pull request; take the number from that link.
+        for (const card of col.querySelectorAll('.issue-card')) {
+          const link = card.querySelector('a[href*="/issues/"], a[href*="/pulls/"]')?.getAttribute('href') || '';
+          const m = link.match(/\/(?:issues|pulls)\/(\d+)$/);
+          if (!m) continue;
+          const n = Number(m[1]);
+          if (!where.has(n)) where.set(n, []);
+          where.get(n).push({project, column, color, href});
+        }
+      }
+    }
+    return {where, multi: links.size > 1};
+  };
+
+  // ---------------------------------------------------------------------------------------------------------------------
+  // Adding the badge(s) to one row of the list.
+  // ---------------------------------------------------------------------------------------------------------------------
+  // The row also remembers its column(s) in item.boardColumns, which the filter uses later. Rows on no board get NONE.
+  const decorate = async (item) => {
+    const info = parse(item);
+    if (!info) return;
+    const {where, multi} = await boardsOf(info.repo);
+    const found = where.get(info.number) || [];
+    item.boardColumns = found.length ? [...new Set(found.map((w) => w.column))] : [NONE];
+
+    // Put the badge where Gitea shows the item's labels; if Gitea ever drops that element, fall back to the title row.
+    const target = item.querySelector('.labels-list') || item.querySelector('.item-header > div');
+    for (const w of found) {
+      const badge = document.createElement('a');
+      // "ui label" is Gitea's own label style, so the badge looks like a normal Gitea label.
+      // "board-column-badge" is our own class name, used by the test to find the badges.
+      badge.className = 'ui label board-column-badge';
+      badge.href = w.href;                          // clicking the badge opens the board
+      badge.title = `${w.project}: ${w.column}`;    // tooltip on hover, always with the board name
+      // With more than one board in the repository, the badge also says which board, e.g. "Roadmap: To Do".
+      badge.textContent = multi ? `${w.project}: ${w.column}` : w.column;
+      badge.style.backgroundColor = w.color;
+      badge.style.color = textColor(w.color);
+      badge.style.marginLeft = '4px';
+      target.prepend(badge);   // first in the label area, before the item's normal labels
+    }
+  };
+
+  // ---------------------------------------------------------------------------------------------------------------------
+  // b. The rows of the current page: badges right away.
+  // ---------------------------------------------------------------------------------------------------------------------
+  // "original" = the rows Gitea put on this page. Without a status filter exactly these are shown, as Gitea intended.
+  const original = [...list.querySelectorAll(':scope > .item')];
+  const current = original.map((item) => decorate(item).catch((e) => console.warn('board column badge:', e)));
+
+  // ---------------------------------------------------------------------------------------------------------------------
+  // c. The other pages of the same list, in the background.
+  // ---------------------------------------------------------------------------------------------------------------------
+  // Gitea shows its page buttons (".page.buttons") only when the list has more than one page. No buttons: nothing to do.
+  const pager = document.querySelector('.page.buttons');
+  let truncated = false;   // becomes true when the list has more than MAX_PAGES pages
+
+  const loadOtherPages = async () => {
+    if (!pager) return [];
+    // The page number of the current page, from the address (?page=3); no number means page 1.
+    const here = Number(new URL(location.href).searchParams.get('page')) || 1;
+    // Items already in the list, by their link, so an item never appears twice (e.g. when an issue is updated while we
+    // read the pages and moves from one page to the next).
+    const seen = new Set(original.map((item) => parse(item)?.id).filter(Boolean));
+    const before = [], after = [];   // rows of the pages before and after the current page, in Gitea's order
+
+    // The number of the last page. Gitea's page buttons link to pages with "?page=N"; the highest N among them is the
+    // last page (Gitea has a "Last" button that points to it). Without such links (should not happen) we fall back to
+    // MAX_PAGES and stop at the first page that brings nothing new.
+    const numbers = [...pager.querySelectorAll('a[href]')]
+      .map((a) => Number(new URL(a.getAttribute('href'), location.href).searchParams.get('page')) || 0);
+    const last = numbers.length ? Math.max(here, ...numbers) : MAX_PAGES;
+    if (last > MAX_PAGES) truncated = true;   // more pages than we are willing to read
+
+    for (let n = 1; n <= Math.min(last, MAX_PAGES); n++) {
+      if (n === here) continue;   // this page is already on screen
+      // The same address as the current page (so the same Gitea filters and sorting), only with another page number.
+      // The "#..." part (our own filter) is left out: the server does not need it.
+      const url = new URL(location.href);
+      url.hash = '';
+      url.searchParams.set('page', String(n));
+      const doc = await page(url.pathname + url.search);
+      const rows = doc ? [...doc.querySelectorAll('#issue-list > .item')] : [];
+      let added = 0;
+      for (const row of rows) {
+        const id = parse(row)?.id;
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        added++;
+        // Copy the row from the downloaded page into this page, hidden, and mark it as coming from another page.
+        const copy = document.importNode(row, true);
+        copy.dataset.boardOtherPage = String(n);
+        copy.style.display = 'none';
+        (n < here ? before : after).push(copy);
+      }
+      // A page after the current one that brings nothing new means we have passed the end of the list. (Gitea answers a
+      // page number beyond the last page with the last page again, so "nothing new" is the reliable end signal.)
+      if (n > here && !added) break;
+    }
+    // Put the rows in Gitea's order: earlier pages before the current page's rows, later pages after them.
+    const first = original[0] || null;
+    for (const row of before) list.insertBefore(row, first);
+    for (const row of after) list.append(row);
+    return [...before, ...after];
+  };
+
+  // ---------------------------------------------------------------------------------------------------------------------
+  // d. The "Status" dropdown, built once everything is loaded.
+  // ---------------------------------------------------------------------------------------------------------------------
+  // all = every row: the ones of this page plus the ones of the other pages.
+  const filterDropdown = (all) => {
+    // None of the repositories in this list has a board: a status filter would be meaningless, so show nothing.
+    if (!columns.size) return;
+
+    // Rows whose boards could not be read have no columns yet; treat them as "no board".
+    for (const item of all) item.boardColumns ||= [NONE];
+
+    // How many rows of the whole list are in column c (shown next to each choice in the dropdown).
+    const count = (c) => all.filter((item) => item.boardColumns.includes(c)).length;
+
+    // Small helper to create an HTML element with an optional class and text.
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text) e.textContent = text;
+      return e;
+    };
+
+    // A small coloured dot shown in front of each column in the dropdown. Without a colour (used for "no board") it is
+    // an empty circle with a thin border.
+    const dot = (color) => {
+      const d = el('span', 'board-column-dot');
+      Object.assign(d.style, {display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', flexShrink: '0',
+        backgroundColor: color || 'transparent', border: color ? 'none' : '1px solid var(--color-secondary-dark-4)'});
+      return d;
+    };
+
+    // The dropdown uses exactly the same HTML structure and CSS classes as Gitea's own filter dropdowns (Label,
+    // Milestone, Project ...), so it looks identical. Gitea's JavaScript notices new elements with the classes
+    // "ui dropdown" by itself and makes them open and close, so we do not need any code for that.
+    //   <div class="item ui dropdown jump">   the button in the filter bar
+    //     <span class="text">Status</span>    the button text
+    //     <svg ...>                            the small triangle
+    //     <div class="menu">...</div>          the list that opens
+    const dropdown = el('div', 'item ui dropdown jump board-column-filter');
+    const label = el('span', 'text');
+    dropdown.append(label);
+    // The triangle icon, copied from Gitea's own "octicon-triangle-down" icon.
+    dropdown.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 16 16" class="svg octicon-triangle-down dropdown icon" width="14" height="14" aria-hidden="true"><path d="m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427"></path></svg>');
+    const menu = el('div', 'menu flex-items-menu');
+    // Heading at the top of the open list. It says the filter covers all pages, or only the first MAX_PAGES pages of an
+    // extremely long list.
+    menu.append(el('div', 'header', truncated ? T.headerFirst(MAX_PAGES) : T.header));
+    dropdown.append(menu);
+
+    // entries: filter value -> the menu entry for it. The value '' means "all" (no filter).
+    const entries = new Map();
+
+    // Add one entry to the menu.
+    //   value = the filter value ('' for all, a column name, or NONE)
+    //   text  = what the user sees
+    //   color = colour of the dot in front of it
+    //   n     = number of rows, shown on the right
+    const entry = (value, text, color, n) => {
+      const a = el('a', 'item board-column-filter-item');
+      // A real link to the filtered address, so "open in new tab" and copying the link also work.
+      a.href = value ? `#status=${encodeURIComponent(value)}` : '#';
+      a.dataset.column = value;   // used by the test to find the entry
+      if (value) a.append(dot(value === NONE ? null : color));
+      a.append(el('span', 'gt-ellipsis', text));
+      if (n !== undefined) a.append(el('span', 'tw-ml-auto tw-text-text-light', String(n)));
+      // On a normal click we apply the filter ourselves instead of following the link; preventDefault stops the browser
+      // from jumping to the top of the page, which following a "#" link would do. Gitea closes the menu by itself.
+      a.addEventListener('click', (e) => { e.preventDefault(); apply(value); });
+      entries.set(value, a);
+      menu.append(a);
+    };
+
+    // The menu: "All", a divider line, every column in board order, and finally "No board".
+    entry('', T.all, null, all.length);
+    menu.append(el('div', 'divider'));
+    for (const [c, {color}] of columns) entry(c, c, color, count(c));
+    entry(NONE, NONE, null, count(NONE));
+
+    // Where to put the dropdown:
+    //   - repository lists have Gitea's "Project" dropdown: put ours right after it;
+    //   - the global /issues page has a filter bar without "Project": put ours first in that bar;
+    //   - if neither exists (e.g. Gitea changed its layout), put it in a row of its own just above the list.
+    const project = document.querySelector('.project-filter');
+    const bar = document.querySelector('.list-header-filters');
+    if (project) project.after(dropdown);
+    else if (bar) bar.prepend(dropdown);
+    else {
+      const row = el('div', 'ui secondary menu tw-m-0 tw-mb-2');
+      row.append(dropdown);
+      list.before(row);
+    }
+
+    // Read the current filter from the address, e.g. "#status=To%20Do" -> "To Do". Returns '' when there is none.
+    // "#kolom=" is the older name of the same setting (the dropdown used to be called "Kolom"); links that people saved
+    // with it keep working.
+    const fromAddress = () => decodeURIComponent((location.hash.match(/^#(?:status|kolom)=(.*)$/) || [])[1] || '');
+
+    // Apply a filter value: show/hide rows and Gitea's page buttons, mark the chosen entry, update the button text and
+    // the address.
+    const apply = (value) => {
+      // A column name in the address that does not exist in this list (e.g. an old link): show everything.
+      if (value && !entries.has(value)) value = '';
+
+      // Write the choice into the address without reloading the page and without adding a "back" step to the browser
+      // history. Without a filter the "#..." part is removed completely.
+      history.replaceState(null, '', value ? `#status=${encodeURIComponent(value)}` : location.pathname + location.search);
+
+      // Which rows to show (display '' = normal, 'none' = hidden):
+      //   - no filter: only the rows Gitea put on this page, exactly as Gitea shows them;
+      //   - a filter:  every row of the whole list, from any page, that is in the chosen column.
+      for (const item of all) {
+        const show = value ? item.boardColumns.includes(value) : !item.dataset.boardOtherPage;
+        item.style.display = show ? '' : 'none';
+      }
+      // Gitea's page buttons only make sense for Gitea's own pages; with a filter they would be misleading.
+      if (pager) pager.style.display = value ? 'none' : '';
+
+      // Mark the chosen entry in the menu, the same way Gitea marks the chosen entry in its own filters.
+      for (const [v, a] of entries) a.classList.toggle('selected', v === value);
+
+      // Button text: "Status" without a filter; with a filter the coloured dot plus the column name, in bold.
+      label.replaceChildren();
+      if (value) {
+        const d = dot(value === NONE ? null : columns.get(value)?.color);
+        d.style.marginRight = '4px';
+        label.append(d);
+      }
+      label.append(value ? value : T.status);
+      label.style.fontWeight = value ? '600' : '';
+    };
+
+    // If the user changes the "#..." part by hand, or uses the back button to it, apply that filter too.
+    window.addEventListener('hashchange', () => apply(fromAddress()));
+
+    // Apply the filter that was in the address when the page was opened (e.g. from a bookmark).
+    apply(fromAddress());
+  };
+
+  // ---------------------------------------------------------------------------------------------------------------------
+  // Start.
+  // ---------------------------------------------------------------------------------------------------------------------
+  // The badges of the current page (b, already started above) and the other pages (c) load at the same time. When both
+  // are finished, and the other pages have their badges too, the dropdown is built (d).
+  // An error is written to the browser console and never shown to the user: at worst some badges are missing, or the
+  // filter only covers the current page.
+  const others = loadOtherPages()
+    .then((rows) => Promise.all(rows.map((row) => decorate(row).catch((e) => console.warn('board column badge:', e))))
+      .then(() => rows))
+    .catch((e) => { console.warn('board column pages:', e); return []; });
+  Promise.all([others, ...current])
+    .then(([rows]) => filterDropdown([...original, ...rows]))
+    .catch((e) => console.warn('board column filter:', e));
+})();
+</script>

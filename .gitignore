@@ -1,0 +1,12 @@
+# Screenshots made by test/test.sh; the ones used in README.md are kept in git.
+test/out/*
+!test/out/board.png
+!test/out/repo.png
+!test/out/dashboard.png
+!test/out/filter-open.png
+!test/out/filter.png
+!test/out/filter-noboard.png
+!test/out/dashboard-filter.png
+!test/out/filter-open-nl.png
+# Scratch folder of test/test.sh
+test/.work/
