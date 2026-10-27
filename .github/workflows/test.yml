@@ -1,0 +1,35 @@
+# Runs the end-to-end test (test/test.sh): a throwaway Gitea in Docker, test data, and checks in a real Chromium.
+# On every push to main and every pull request, and once a week, so a new gitea/gitea:latest that breaks the script is
+# noticed before anyone upgrades. The screenshots of the run are kept as an artifact named "screenshots".
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 5 * * 1'   # Mondays, 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    # Only on GitHub: Gitea Actions also reads .github/workflows, but its runners do not give jobs a Docker daemon.
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # As root: test.sh gives the test Gitea's data folder to user id 1000, the user Gitea runs as in its container.
+      - name: End-to-end test
+        run: sudo test/test.sh
+
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: test/out/

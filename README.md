@@ -1,5 +1,8 @@
 # gitea-board-badges: show project board columns in Gitea's issue list
 
+[![Test](https://github.com/Vandewaetere/gitea-board-badges/actions/workflows/test.yml/badge.svg)](https://github.com/Vandewaetere/gitea-board-badges/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/Vandewaetere/gitea-board-badges)](https://github.com/Vandewaetere/gitea-board-badges/releases/latest)
+
 **Show the project board (kanban) column of every issue and pull request in [Gitea](https://about.gitea.com)'s issue list, and filter issues by board column across all pages.** A drop-in Gitea customization (one template file), no plugin system or Gitea changes needed. Also works with Gitea-based forks that keep Gitea's templates.
 
 Gitea's project boards (kanban: To Do, In Progress, Done …) are great, but the issue list does not tell you where an issue is on the board, and you cannot filter issues by board column. This adds:
@@ -104,6 +107,8 @@ If you already have your own `custom/footer.tmpl`, paste the contents of this fi
 Tested with Gitea 28.2.0.
 
 ## Testing
+
+On GitHub the test runs on every push, every pull request and once a week against `gitea/gitea:latest` ([`.github/workflows/test.yml`](.github/workflows/test.yml)); the screenshots of each run are kept as an artifact. To run it yourself:
 
 ```sh
 test/test.sh                                   # with gitea/gitea:latest
