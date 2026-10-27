@@ -1,6 +1,7 @@
 {{/*
   ==========================================================================================================================
   gitea-board-badges — footer.tmpl
+  Version 1.1.0 — https://github.com/Vandewaetere/gitea-board-badges (changes: CHANGELOG.md)
   ==========================================================================================================================
 
   WHAT THIS DOES
@@ -31,7 +32,8 @@
   HOW IT WORKS (SHORT VERSION)
   ----------------------------
     a. Find the issue list on the page. No list: do nothing.
-    b. For the items on the current page: download the project boards of their repository, read which issue is in
+    b. For the items on the current page: download the project boards of their repository and of the repository's
+       owner (organisation or user boards, which can hold issues of several repositories), read which issue is in
        which column, and add the badges. This happens right away, so the badges appear quickly.
     c. At the same time, if the list has more than one page: download the other pages of the same list (with the same
        Gitea filters and sorting), add their items to the list, hidden, and give them badges too.
@@ -66,9 +68,12 @@
                   ?page=N                      the address parameter Gitea uses for page N of a list
     Filter bar:   .project-filter              Gitea's own "Project" dropdown; ours goes right after it
                   .list-header-filters         the filter bar on /issues (which has no Project dropdown)
+    Board lists:  /owner/repo/projects         the repository's boards, links like /owner/repo/projects/7
+                  /owner/-/projects            the organisation's (or user's) boards, links like /owner/-/projects/3
     Board page:   .project-column              one column; its colour is in style="background: #rrggbb"
                   .project-column-title-text   the column name
-                  .issue-card                  one card (issue or pull request) in a column
+                  .issue-card                  one card (issue or pull request) in a column; its link, e.g.
+                                               /owner/repo/issues/12, says which repository the card belongs to
 
   TEXTS
   -----
@@ -150,35 +155,48 @@
   const columns = new Map();
 
   // ---------------------------------------------------------------------------------------------------------------------
-  // Reading the boards of a repository.
+  // Reading the boards.
   // ---------------------------------------------------------------------------------------------------------------------
-  // boards: "owner/repo" -> a promise of what its boards say. Kept so every repository's boards are downloaded only once,
-  // even when its items appear on several pages of the list.
-  const boards = new Map();
-  const boardsOf = (key) => {
-    if (!boards.has(key)) boards.set(key, readBoards(key));
-    return boards.get(key);
+  // Gitea has two kinds of boards, and an issue can be on both kinds:
+  //   - repository boards, listed on /owner/repo/projects, with addresses like /owner/repo/projects/7;
+  //   - boards of the owner (an organisation or a user), listed on /owner/-/projects, with addresses like
+  //     /owner/-/projects/3. Such a board can hold issues of several repositories of that owner.
+  // The repository's projects page does not list the owner's boards, so both lists are read.
+
+  // Helper: keep the promise of a download per key, so every list and every repository is read only once, even when its
+  // items appear on several pages of the list or in several repositories.
+  const once = (cache, key, read) => {
+    if (!cache.has(key)) cache.set(key, read());
+    return cache.get(key);
   };
 
-  // Download all open boards of one repository. Returns:
-  //   where:  issue number -> list of {project, column, color, href} (a list, because an issue can be on several boards)
-  //   multi:  true when the repository has more than one board (badges then also show the board's name)
-  const readBoards = async (key) => {
-    const where = new Map();
-    // The page /owner/repo/projects lists the repository's open boards. We only need the links to the boards in it,
-    // which look like /owner/repo/projects/7. A Set removes duplicates (Gitea may link to a board more than once).
-    const overview = await page(`${base}/${key}/projects`);
-    if (!overview) return {where, multi: false};   // projects page not readable (e.g. projects disabled): no badges
-    const boardLink = new RegExp(`^${base}/${key}/projects/\\d+$`);
+  // Helper: escape a text for use inside a regular expression (owner and repository names may contain a ".").
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // lists: address of a projects page -> a promise of the boards on it.
+  const lists = new Map();
+
+  // Download all open boards listed on one projects page (/owner/repo/projects or /owner/-/projects). Returns a list of
+  // boards, each {href, columns, cards}:
+  //   columns: [{column, color}] in board order
+  //   cards:   [{repo, number, project, column, color, href}], one per card; "repo" is "owner/repo" of the issue
+  const readList = async (url) => {
+    // We only need the links to the boards on the page, which look like <url>/7. A Set removes duplicates (Gitea may
+    // link to a board more than once).
+    const overview = await page(url);
+    if (!overview) return [];   // projects page not readable (e.g. projects disabled, no access): no boards
+    const boardLink = new RegExp(`^${esc(url)}/\\d+$`);
     const links = new Set([...overview.querySelectorAll('a[href]')].map((a) => a.getAttribute('href'))
       .filter((h) => boardLink.test(h)));
 
+    const result = [];
     for (const href of links) {
       // Download one board. Boards are read one after the other (not all at once) to keep the load on Gitea low.
       const board = await page(href);
       if (!board) continue;
       // The board's name is the first part of the page title, e.g. "Roadmap - Projects - ..." -> "Roadmap".
       const project = (board.querySelector('title')?.textContent || '').split(' - ')[0].trim();
+      const found = {href, columns: [], cards: []};
 
       for (const col of board.querySelectorAll('.project-column')) {
         // Column name, e.g. "To Do".
@@ -186,21 +204,50 @@
         // Column colour: Gitea puts it in the column's style attribute as "background: #0052cc". A column without a
         // colour gets a neutral grey.
         const color = ((col.getAttribute('style') || '').match(/background:\s*(#[0-9a-fA-F]{6})/) || [])[1] || '#767676';
-        // Remember the column for the dropdown (only the first time we see this name, which keeps the board order).
-        if (column && !columns.has(column)) columns.set(column, {color});
+        if (column) found.columns.push({column, color});
 
-        // Every card in this column links to its issue or pull request; take the number from that link.
+        // Every card in this column links to its issue or pull request, e.g. /owner/repo/issues/12. The repository is
+        // taken from that link too: on an owner's board, other-repo#5 and this-repo#5 are different cards.
         for (const card of col.querySelectorAll('.issue-card')) {
           const link = card.querySelector('a[href*="/issues/"], a[href*="/pulls/"]')?.getAttribute('href') || '';
-          const m = link.match(/\/(?:issues|pulls)\/(\d+)$/);
-          if (!m) continue;
-          const n = Number(m[1]);
-          if (!where.has(n)) where.set(n, []);
-          where.get(n).push({project, column, color, href});
+          const m = new URL(link, location.href).pathname.match(re);
+          if (m) found.cards.push({repo: `${m[1]}/${m[2]}`, number: Number(m[3]), project, column, color, href});
         }
       }
+      result.push(found);
     }
-    return {where, multi: links.size > 1};
+    return result;
+  };
+
+  // repos: "owner/repo" -> a promise of what the boards say about that repository's items.
+  const repos = new Map();
+  const boardsOf = (key) => once(repos, key, () => readBoards(key));
+
+  // What the boards say about one repository. Returns:
+  //   where:  issue number -> list of {project, column, color, href} (a list, because an issue can be on several boards)
+  //   multi:  true when more than one board is involved (badges then also show the board's name)
+  const readBoards = async (key) => {
+    const owner = key.split('/')[0];
+    // The repository's own boards and the owner's boards. The owner's list is shared by all its repositories.
+    const [own, shared] = await Promise.all([
+      once(lists, `${base}/${key}/projects`, () => readList(`${base}/${key}/projects`)),
+      once(lists, `${base}/${owner}/-/projects`, () => readList(`${base}/${owner}/-/projects`)),
+    ]);
+    // All the repository's own boards count, even empty ones; of the owner's boards only those that hold at least one
+    // item of this repository, because the others are about other repositories.
+    const relevant = [...own, ...shared.filter((b) => b.cards.some((c) => c.repo === key))];
+
+    const where = new Map();
+    for (const board of relevant) {
+      // Remember the columns for the dropdown (only the first time we see a name, which keeps the board order).
+      for (const {column, color} of board.columns) if (!columns.has(column)) columns.set(column, {color});
+      for (const {repo, number, ...w} of board.cards) {
+        if (repo !== key) continue;
+        if (!where.has(number)) where.set(number, []);
+        where.get(number).push(w);
+      }
+    }
+    return {where, multi: relevant.length > 1};
   };
 
   // ---------------------------------------------------------------------------------------------------------------------

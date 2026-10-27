@@ -1,0 +1,46 @@
+# Creates a GitHub release for every tag vX.Y.Z that does not have one yet, with the matching section of CHANGELOG.md as
+# notes and footer.tmpl (as it is in that tag) as the download.
+#
+# The repository is developed elsewhere and pushed here as a mirror, which pushes the branch and the tags together. The
+# workflow runs on both, and each run releases whatever tag is still missing, so it also catches tags that were pushed
+# before this workflow existed. Runs queue up behind each other, so the same release is never created twice.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Only on GitHub: Gitea Actions also reads .github/workflows, and there the release is made by hand.
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Release missing tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          for tag in $(git tag --list 'v*' --sort=v:refname); do
+            if gh release view "$tag" >/dev/null 2>&1; then continue; fi
+            v=${tag#v}
+            # The section "## [X.Y.Z] ..." of CHANGELOG.md on main, up to the next "## " heading.
+            awk -v h="## [$v]" 'index($0, "## ") == 1 { p = index($0, h) == 1; next } p' CHANGELOG.md > notes.md
+            if ! grep -q . notes.md; then echo "::error::no section [$v] in CHANGELOG.md"; exit 1; fi
+            mkdir -p "dist/$tag" && git show "$tag:footer.tmpl" > "dist/$tag/footer.tmpl"
+            gh release create "$tag" "dist/$tag/footer.tmpl" --verify-tag --title "$tag" --notes-file notes.md
+          done

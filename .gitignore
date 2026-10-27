@@ -8,5 +8,6 @@ test/out/*
 !test/out/filter-noboard.png
 !test/out/dashboard-filter.png
 !test/out/filter-open-nl.png
+!test/out/org.png
 # Scratch folder of test/test.sh
 test/.work/

@@ -13,7 +13,8 @@
 #   1. Start a throwaway Gitea in a Docker container (the official image, gitea/gitea:latest unless GITEA_IMAGE says
 #      otherwise), with footer.tmpl installed the same way as in production.
 #   2. Fill it with test data through Gitea's API: one user, one private repository with four issues, one board with the
-#      columns To Do / In Progress / Done, and three of the four issues placed on that board.
+#      columns To Do / In Progress / Done, and three of the four issues placed on that board. Next to that an
+#      organisation with two repositories that share one organisation board, with overlapping issue numbers.
 #   3. Open the issue lists in Chromium (Microsoft's official Playwright image) and check the result (test/browser.mjs).
 #   4. Remove everything again, also when the test fails halfway.
 #   Nothing touches any other Gitea: the test Gitea runs on its own private Docker network.
@@ -125,6 +126,26 @@ j -X DELETE $A/projects/1/columns/1
 
 # Put issue 1 in To Do, issue 2 in In Progress and issue 3 in Done ("issue-id column-id").
 for p in '1 2' '2 3' '3 4'; do set -- $p; j -X POST $A/projects/1/columns/$2/issues/$1; done
+
+# An organisation "acme" with two private repositories, "web" and "api", that share one organisation board. Both
+# repositories get two issues, so they have the same issue numbers (#1 and #2): the script must match a card on
+# repository and number, not on the number alone.
+O=http://127.0.0.1:3000/api/v1/orgs/acme
+j -X POST http://127.0.0.1:3000/api/v1/orgs -d '{"username":"acme"}'
+for r in web api; do j -X POST $O/repos -d "{\"name\":\"$r\",\"private\":true}"; done
+# Issue ids 5 and 6 (web#1, web#2), then 7 and 8 (api#1, api#2).
+for r in web api; do for n in First Second; do
+  j -X POST http://127.0.0.1:3000/api/v1/repos/acme/$r/issues -d "{\"title\":\"$r $n\"}"
+done; done
+
+# The organisation board is project 2; its "basic kanban" columns have the ids 5 Backlog, 6 To Do, 7 In Progress, 8 Done.
+j -X POST $O/projects -d '{"title":"Roadmap","template_type":"basic_kanban"}'
+for c in '6 #0052cc' '7 #009800' '8 #fbca04'; do set -- $c; j -X PATCH $O/projects/2/columns/$1 -d "{\"color\":\"$2\"}"; done
+j -X POST $O/projects/2/columns/6/default
+j -X DELETE $O/projects/2/columns/5
+
+# web#1 in To Do and api#2 in In Progress; web#2 and api#1 stay off the board ("issue-id column-id").
+for p in '5 6' '8 7'; do set -- $p; j -X POST $O/projects/2/columns/$2/issues/$1; done
 EOF
 
 # --------------------------------------------------------------------------------------------------------------------------

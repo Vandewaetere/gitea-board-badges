@@ -12,6 +12,8 @@
 // Gitea is set to show only 2 issues per page, so the list has 2 pages. Gitea sorts newest first:
 //   page 1: #4 "Not on a board", #3 "Third issue"      page 2: #2 "Second issue", #1 "First issue"
 // That lets the test check that the status filter also finds issues that are on another page than the one that is open.
+// Next to that, organisation "acme" has repositories "web" and "api" (issues #1 and #2 each) on one organisation board:
+//   web#1 "web First" -> To Do, api#2 "api Second" -> In Progress, web#2 and api#1 on no board.
 //
 // This script drives a real Chromium browser like a person would: it logs in, opens pages, clicks the dropdown, and then
 // checks what is visible on the screen. Every check prints one line starting with "ok" or "FAIL". At the end the script
@@ -182,10 +184,11 @@ await page.goto(`${BASE}/tester/demo/issues?page=2#status=Done`);
 await page.waitForSelector('.board-column-filter', {timeout: 10000}).catch(() => {});
 await check('page 2 with #status=Done', ['Third issue']);
 
-// A link that already contains a filter, on the global /issues page: only issue #2 (In Progress).
+// A link that already contains a filter, on the global /issues page: demo#2 from the repository board and api#2 from the
+// organisation board (both In Progress). This list mixes repositories and both kinds of boards.
 await page.goto(`${BASE}/issues#status=In%20Progress`);
 await page.waitForSelector('.board-column-filter', {timeout: 10000}).catch(() => {});
-await check('/issues with #status=In Progress', ['Second issue']);
+await check('/issues with #status=In Progress', ['Second issue', 'api Second']);
 await page.screenshot({path: '/out/dashboard-filter.png'});
 console.log('label:', await page.$eval('.board-column-filter > .text', (t) => t.textContent));
 
@@ -202,7 +205,36 @@ if (idle !== 'Status') failed++;
 console.log(`${idle === 'Status' ? 'ok  ' : 'FAIL'} button without filter: ${idle}`);
 
 // -------------------------------------------------------------------------------------------------------------------------
-// Part 3: Dutch texts. Switch the test user's Gitea language to Dutch (Settings -> Appearance, done here through the same
+// Part 3: an organisation board. test.sh made the organisation "acme" with the repositories "web" and "api", which share
+// one organisation board (/acme/-/projects/2). Both have an issue #1 and #2, so a badge must come from the card of the
+// same repository: web#1 -> To Do, api#2 -> In Progress, and web#2 and api#1 get nothing.
+// -------------------------------------------------------------------------------------------------------------------------
+for (const [repo, want] of [['web', {'web First': 'To Do', 'web Second': null}],
+  ['api', {'api First': null, 'api Second': 'In Progress'}]]) {
+  await page.goto(`${BASE}/acme/${repo}/issues`);
+  await page.waitForSelector('.board-column-filter', {timeout: 10000}).catch(() => {});
+  const got = await page.$$eval('#issue-list > .item', (items) => Object.fromEntries(items.map((i) => [
+    i.querySelector('a.list-item-large-title').textContent.trim(),
+    i.querySelector('.board-column-badge')?.textContent ?? null])));
+  for (const [title, column] of Object.entries(want)) {
+    const ok = got[title] === column;
+    if (!ok) failed++;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} org board: ${title} -> ${got[title]} (expected ${column})`);
+  }
+  // The badge must open the organisation board.
+  const href = await page.$eval('.board-column-badge', (b) => new URL(b.href).pathname).catch(() => null);
+  const ok = href === '/acme/-/projects/2';
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} org board: badge links to ${href}`);
+  if (repo === 'web') await page.screenshot({path: '/out/org.png'});
+}
+// The status filter also works with an organisation board.
+await page.goto(`${BASE}/acme/web/issues#status=No%20board`);
+await page.waitForSelector('.board-column-filter', {timeout: 10000}).catch(() => {});
+await check('org board, No board', ['web Second']);
+
+// -------------------------------------------------------------------------------------------------------------------------
+// Part 4: Dutch texts. Switch the test user's Gitea language to Dutch (Settings -> Appearance, done here through the same
 // form Gitea's settings page uses) and check that the dropdown speaks Dutch.
 // -------------------------------------------------------------------------------------------------------------------------
 await page.goto(`${BASE}/user/settings/appearance`);

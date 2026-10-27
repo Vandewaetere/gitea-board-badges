@@ -49,7 +49,13 @@ Badges and the filter also work on `/issues`, across all your repositories.
 
 ![Global issues overview filtered on In Progress](test/out/dashboard-filter.png)
 
-### 7. In your language
+### 7. Organisation boards
+
+Boards of an organisation (or user), under `/{owner}/-/projects`, work too, also when one board holds the issues of several repositories. Each repository only gets the badges of its own issues.
+
+![Issue list of an organisation repository with a badge from the organisation board](test/out/org.png)
+
+### 8. In your language
 
 The texts follow the language chosen in Gitea. English and Dutch are included; here in Dutch.
 
@@ -60,7 +66,7 @@ All screenshots are made automatically by the end-to-end test (`test/test.sh`), 
 ## How it works
 
 - Works on the issue and pull request lists of a repository and on the global `/issues` overview.
-- Reads the repository's project boards with the **visitor's own login and permissions** (Gitea's API does not accept the browser session, the board pages do). It only reads; it never changes anything.
+- Reads the project boards of the repository and of its owner (organisation or user boards) with the **visitor's own login and permissions** (Gitea's API does not accept the browser session, the board pages do). It only reads; it never changes anything.
 - For the filter it also reads the other pages of the list you are looking at, with the same Gitea filters and sorting (open/closed, labels, search …). Without a status selected you see Gitea's normal page with its page buttons; with a status selected you see all matching issues and the page buttons are hidden. At most 50 pages (1,000 issues with Gitea's default page size) are read.
 - The selected status is kept in the URL (`#status=To%20Do`), so a filtered list can be bookmarked or shared.
 - Texts follow the language the visitor chose in Gitea: English and Dutch are included. Add a language in the `TEXTS` table at the top of the script.
@@ -70,7 +76,13 @@ The code is commented in detail; start with the overview at the top of [`footer.
 
 ## Installation
 
-Put `footer.tmpl` at `$GITEA_CUSTOM/templates/custom/footer.tmpl` and restart Gitea (it reads templates only at startup).
+Download `footer.tmpl` from the [latest release](https://github.com/Vandewaetere/gitea-board-badges/releases/latest), put it at `$GITEA_CUSTOM/templates/custom/footer.tmpl` and restart Gitea (it reads templates only at startup).
+
+```sh
+curl -fLO https://github.com/Vandewaetere/gitea-board-badges/releases/latest/download/footer.tmpl
+```
+
+The version is at the top of the file; what changed is in [CHANGELOG.md](CHANGELOG.md). To update, replace the file and restart Gitea.
 
 With the official Docker image `$GITEA_CUSTOM` is `/data/gitea`, so you can mount the file read-only:
 
@@ -98,14 +110,21 @@ test/test.sh                                   # with gitea/gitea:latest
 GITEA_IMAGE=gitea/gitea:<version> test/test.sh  # with another version, e.g. before upgrading
 ```
 
-Needs Docker. The script starts a throwaway Gitea with `footer.tmpl` (set to 2 issues per page, so the list has two pages), creates a repository with four issues and a board (three issues in To Do, In Progress and Done, one on no board) and checks in Chromium (the official Playwright image) that:
+Needs Docker. The script starts a throwaway Gitea with `footer.tmpl` (set to 2 issues per page, so the list has two pages), creates a repository with four issues and a board (three issues in To Do, In Progress and Done, one on no board), plus an organisation with two repositories that share one organisation board (with the same issue numbers), and checks in Chromium (the official Playwright image) that:
 
 - every issue gets the right badge, in the repository list and in `/issues`;
+- organisation boards give badges too, only to the issues of the right repository;
 - exactly the other page of the list is fetched;
 - the Status dropdown sits next to Project and filters the whole list (also issues on the other page), hides the page buttons while filtering, survives a reload, and works from a link with `#status=`;
 - the texts are Dutch for a user who chose Dutch in Gitea.
 
 Screenshots land in `test/out/`. Everything is removed afterwards.
+
+## Releasing
+
+1. Set the version at the top of `footer.tmpl` and add a section `## [X.Y.Z] - date` to [CHANGELOG.md](CHANGELOG.md).
+2. Tag the commit `vX.Y.Z` and push the tag.
+3. On GitHub, [`.github/workflows/release.yml`](.github/workflows/release.yml) creates the release, with that CHANGELOG section as notes and `footer.tmpl` as the download.
 
 ## After a Gitea update
 
@@ -113,6 +132,7 @@ Run `test/test.sh` with the new version first. If it fails, check whether these 
 
 - issue list: `#issue-list > .item`, `a.list-item-large-title`, `.labels-list`, `.page.buttons` (page buttons with `?page=N` links);
 - filter bar: `.project-filter` (the dropdown is placed after it) or `.list-header-filters` (on `/issues`); without either, the dropdown gets its own row above the list;
+- board lists: `/{owner}/{repo}/projects` and `/{owner}/-/projects`, with links to the boards;
 - board page: `.project-column` (colour in `style="background: #…"`), `.project-column-title-text`, `.issue-card`.
 
 ## FAQ
@@ -128,6 +148,9 @@ No. It is one template file that Gitea includes in every page. It reads the boar
 
 **Does it work with private repositories?**
 Yes. Every visitor only sees badges for boards they are allowed to see.
+
+**Does it work with organisation project boards?**
+Yes, since version 1.1.0: boards under `/{org}/-/projects` are read next to the repository's own boards. A board can hold issues of several repositories; each repository only gets the badges of its own issues.
 
 **Which Gitea versions are supported?**
 Tested with Gitea 28.2.0. Run `test/test.sh` with `GITEA_IMAGE=gitea/gitea:<version>` to check another version before upgrading.
