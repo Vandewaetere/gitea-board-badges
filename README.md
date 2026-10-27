@@ -108,7 +108,7 @@ Tested with Gitea 28.2.0.
 
 ## Testing
 
-On GitHub the test runs on every push, every pull request and once a week against `gitea/gitea:latest` ([`.github/workflows/test.yml`](.github/workflows/test.yml)); the screenshots of each run are kept as an artifact. To run it yourself:
+On GitHub the test runs against `gitea/gitea:latest` on every push and every pull request, and by hand from the Actions tab ([`.github/workflows/test.yml`](.github/workflows/test.yml)); the screenshots of each run are kept as an artifact. To run it yourself:
 
 ```sh
 test/test.sh                                   # with gitea/gitea:latest

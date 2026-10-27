@@ -1,14 +1,12 @@
 # Runs the end-to-end test (test/test.sh): a throwaway Gitea in Docker, test data, and checks in a real Chromium.
-# On every push to main and every pull request, and once a week, so a new gitea/gitea:latest that breaks the script is
-# noticed before anyone upgrades. The screenshots of the run are kept as an artifact named "screenshots".
+# On every push to main and every pull request, and by hand (Actions -> Test -> Run workflow), e.g. to check a new
+# gitea/gitea:latest before upgrading. The screenshots of the run are kept as an artifact named "screenshots".
 name: Test
 
 on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    - cron: '17 5 * * 1'   # Mondays, 05:17 UTC
   workflow_dispatch:
 
 permissions:
