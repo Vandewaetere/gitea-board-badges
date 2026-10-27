@@ -1,7 +1,7 @@
 # gitea-board-badges: show project board columns in Gitea's issue list
 
-[![Test](https://github.com/Vandewaetere/gitea-board-badges/actions/workflows/test.yml/badge.svg)](https://github.com/Vandewaetere/gitea-board-badges/actions/workflows/test.yml)
-[![Release](https://img.shields.io/github/v/release/Vandewaetere/gitea-board-badges)](https://github.com/Vandewaetere/gitea-board-badges/releases/latest)
+[![Test](https://github.com/Vandewaetere/gitea-board-badges/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/Vandewaetere/gitea-board-badges/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/Vandewaetere/gitea-board-badges?display_name=tag)](https://github.com/Vandewaetere/gitea-board-badges/releases/latest)
 
 **Show the project board (kanban) column of every issue and pull request in [Gitea](https://about.gitea.com)'s issue list, and filter issues by board column across all pages.** A drop-in Gitea customization (one template file), no plugin system or Gitea changes needed. Also works with Gitea-based forks that keep Gitea's templates.
 
