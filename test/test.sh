@@ -127,6 +127,10 @@ j -X DELETE $A/projects/1/columns/1
 # Put issue 1 in To Do, issue 2 in In Progress and issue 3 in Done ("issue-id column-id").
 for p in '1 2' '2 3' '3 4'; do set -- $p; j -X POST $A/projects/1/columns/$2/issues/$1; done
 
+# A normal label "bug" (label id 1) on issue 3, which is on page 1 and has a badge: the badge must line up with it.
+j -X POST $A/labels -d '{"name":"bug","color":"#ee0701"}'
+j -X POST $A/issues/3/labels -d '{"labels":[1]}'
+
 # An organisation "acme" with two private repositories, "web" and "api", that share one organisation board. Both
 # repositories get two issues, so they have the same issue numbers (#1 and #2): the script must match a card on
 # repository and number, not on the number alone.

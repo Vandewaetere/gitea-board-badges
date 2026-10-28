@@ -1,7 +1,7 @@
 {{/*
   ==========================================================================================================================
   gitea-board-badges — footer.tmpl
-  Version 1.1.0 — https://github.com/Vandewaetere/gitea-board-badges (changes: CHANGELOG.md)
+  Version 1.1.1 — https://github.com/Vandewaetere/gitea-board-badges (changes: CHANGELOG.md)
   ==========================================================================================================================
 
   WHAT THIS DOES
@@ -263,19 +263,26 @@
 
     // Put the badge where Gitea shows the item's labels; if Gitea ever drops that element, fall back to the title row.
     const target = item.querySelector('.labels-list') || item.querySelector('.item-header > div');
-    for (const w of found) {
-      const badge = document.createElement('a');
-      // "ui label" is Gitea's own label style, so the badge looks like a normal Gitea label.
+    // Walk backwards, so after prepending the badges are in board order, before the item's normal labels.
+    for (const w of [...found].reverse()) {
+      // Built like Gitea's own labels: a link with class "item" around a "ui label". Gitea's CSS gives that "item" the
+      // spacing and vertical alignment of a label (#issue-list .labels-list > .item), so the badge lines up with the
+      // labels next to it and keeps the same gap.
       // "board-column-badge" is our own class name, used by the test to find the badges.
-      badge.className = 'ui label board-column-badge';
+      const badge = document.createElement('a');
+      badge.className = 'item board-column-badge';
       badge.href = w.href;                          // clicking the badge opens the board
       badge.title = `${w.project}: ${w.column}`;    // tooltip on hover, always with the board name
+      const label = document.createElement('span');
+      label.className = 'ui label';
       // With more than one board in the repository, the badge also says which board, e.g. "Roadmap: To Do".
-      badge.textContent = multi ? `${w.project}: ${w.column}` : w.column;
-      badge.style.backgroundColor = w.color;
-      badge.style.color = textColor(w.color);
-      badge.style.marginLeft = '4px';
-      target.prepend(badge);   // first in the label area, before the item's normal labels
+      label.textContent = multi ? `${w.project}: ${w.column}` : w.column;
+      label.style.backgroundColor = w.color;
+      label.style.color = textColor(w.color);
+      badge.append(label);
+      // Outside the label area (the fallback) Gitea's spacing does not apply: keep the badge off the title.
+      if (!target.matches('.labels-list')) badge.style.marginLeft = '4px';
+      target.prepend(badge);
     }
   };
 

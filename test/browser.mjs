@@ -78,6 +78,26 @@ for (const [path, name] of [['/tester/demo/issues', 'repo'], ['/issues', 'dashbo
     console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${title} -> ${got[title]} (expected ${column})`);
   }
 
+  // The badge must look like a label next to Gitea's own label "bug" (on "Third issue"): the same height, on the same
+  // line, and with the same gap as Gitea keeps between two labels (the margin of its ".item"). Only in the repository
+  // list: in /issues that row is on another page, hidden, and cannot be measured.
+  if (name === 'repo') {
+    const fit = await page.$$eval('#issue-list > .item', (items) => {
+      const row = items.find((i) => i.querySelector('a.list-item-large-title').textContent.trim() === 'Third issue');
+      const badge = row?.querySelector('.board-column-badge');
+      const next = badge?.nextElementSibling;
+      if (!badge || !next) return null;
+      const box = (e) => (e.matches('.ui.label') ? e : e.querySelector('.ui.label')).getBoundingClientRect();
+      const a = box(badge), b = box(next);
+      return {height: [a.height, b.height], top: [a.top, b.top], gap: b.left - a.right,
+        margin: parseFloat(getComputedStyle(next).marginRight)};
+    });
+    const fitOk = fit && Math.abs(fit.height[0] - fit.height[1]) < 0.5 && Math.abs(fit.top[0] - fit.top[1]) < 0.5 &&
+      fit.gap > 0 && Math.abs(fit.gap - fit.margin) < 0.5;
+    if (!fitOk) failed++;
+    console.log(`${fitOk ? 'ok  ' : 'FAIL'} ${name}: badge next to label "bug": ${JSON.stringify(fit)}`);
+  }
+
   // Screenshot for the README and for a visual check by a person (test/out/repo.png and test/out/dashboard.png).
   await page.screenshot({path: `/out/${name}.png`});
 }

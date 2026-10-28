@@ -3,6 +3,13 @@
 Every release is a tag `vX.Y.Z` with a section `## [X.Y.Z]` here; the release on GitHub gets that section as its notes
 and `footer.tmpl` as its download. The version is also at the top of `footer.tmpl`.
 
+## [1.1.1] - 2026-10-28
+
+### Fixed
+- The badge now has the same height, vertical position and spacing as Gitea's own labels next to it. It sat 2.5px
+  lower and touched the first label. It is now built like a Gitea label: a link with class `item` around a `ui label`.
+- With more than one board, the badges are in board order.
+
 ## [1.1.0] - 2026-10-27
 
 ### Added
