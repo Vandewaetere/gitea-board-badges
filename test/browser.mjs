@@ -27,8 +27,8 @@ import { chromium } from 'playwright';
 // Address of the test Gitea, passed in by test.sh (e.g. http://gbb_gitea_1234:3000).
 const BASE = process.env.BASE;
 
-// The expected badge per issue title; null = no badge expected. These are checked on all rows the script has in the
-// list, including the hidden rows it copied from the other page.
+// The expected badge per issue title; null = no badge expected. These are checked on every page of the list together
+// (2 issues per page; /issues also has the 4 issues of the organisation, so 4 pages).
 const expected = {'First issue': 'To Do', 'Second issue': 'In Progress', 'Third issue': 'Done', 'Not on a board': null};
 
 // Start a browser with a fixed window size, so the screenshots always look the same.
@@ -67,20 +67,21 @@ for (const [path, name] of [['/tester/demo/issues', 'repo'], ['/issues', 'dashbo
   await page.waitForSelector('.board-column-filter', {timeout: 10000}).catch(() => {});
 
   // Read the list as it is now shown: for every row its title and the text of its badge (null if it has none).
-  const got = await page.$$eval('#issue-list > .item', (items) => Object.fromEntries(items.map((i) => [
+  const read = () => page.$$eval('#issue-list > .item', (items) => Object.fromEntries(items.map((i) => [
     i.querySelector('a.list-item-large-title').textContent.trim(),
     i.querySelector('.board-column-badge')?.textContent ?? null])));
+  const got = await read();
 
-  // Compare with what we expect, one line per issue.
-  for (const [title, column] of Object.entries(expected)) {
-    const ok = got[title] === column;
-    if (!ok) failed++;
-    console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${title} -> ${got[title]} (expected ${column})`);
-  }
+  // Without a status filter the rows of the other page must stay out of this page: hundreds of hidden rows made
+  // Gitea slow in some browsers. The script only brings them in when a filter needs them.
+  const rows = Object.keys(got).length;
+  if (rows !== 2) failed++;
+  console.log(`${rows === 2 ? 'ok  ' : 'FAIL'} ${name}: rows in the page without a filter: ${rows} (expected 2)`);
+
 
   // The badge must look like a label next to Gitea's own label "bug" (on "Third issue"): the same height, on the same
   // line, and with the same gap as Gitea keeps between two labels (the margin of its ".item"). Only in the repository
-  // list: in /issues that row is on another page, hidden, and cannot be measured.
+  // list: in /issues that row is on another page.
   if (name === 'repo') {
     const fit = await page.$$eval('#issue-list > .item', (items) => {
       const row = items.find((i) => i.querySelector('a.list-item-large-title').textContent.trim() === 'Third issue');
@@ -100,6 +101,22 @@ for (const [path, name] of [['/tester/demo/issues', 'repo'], ['/issues', 'dashbo
 
   // Screenshot for the README and for a visual check by a person (test/out/repo.png and test/out/dashboard.png).
   await page.screenshot({path: `/out/${name}.png`});
+
+  // The other pages of the same list, for the badges of the other issues. (A page number beyond the last page gives
+  // the last page again, which does no harm here.)
+  for (const n of [2, 3, 4]) {
+    await page.goto(`${BASE}${path}?page=${n}`);
+    await page.waitForLoadState('load');
+    await page.waitForSelector('.board-column-filter', {timeout: 10000}).catch(() => {});
+    Object.assign(got, await read());
+  }
+
+  // Compare with what we expect, one line per issue.
+  for (const [title, column] of Object.entries(expected)) {
+    const ok = got[title] === column;
+    if (!ok) failed++;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${title} -> ${got[title]} (expected ${column})`);
+  }
 }
 
 // -------------------------------------------------------------------------------------------------------------------------

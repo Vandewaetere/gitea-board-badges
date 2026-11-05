@@ -1,7 +1,7 @@
 {{/*
   ==========================================================================================================================
   gitea-board-badges — footer.tmpl
-  Version 1.1.1 — https://github.com/Vandewaetere/gitea-board-badges (changes: CHANGELOG.md)
+  Version 1.1.2 — https://github.com/Vandewaetere/gitea-board-badges (changes: CHANGELOG.md)
   ==========================================================================================================================
 
   WHAT THIS DOES
@@ -36,7 +36,8 @@
        owner (organisation or user boards, which can hold issues of several repositories), read which issue is in
        which column, and add the badges. This happens right away, so the badges appear quickly.
     c. At the same time, if the list has more than one page: download the other pages of the same list (with the same
-       Gitea filters and sorting), add their items to the list, hidden, and give them badges too.
+       Gitea filters and sorting) and give their items badges too. Those items stay out of the page until a status
+       filter needs them.
     d. When everything is loaded, build the "Status" dropdown and apply the filter from the URL, if any.
          - no status chosen: the list looks exactly like Gitea's own page, with Gitea's page buttons;
          - a status chosen: all items of the whole list with that status are shown, in Gitea's order, and Gitea's page
@@ -301,7 +302,7 @@
   let truncated = false;   // becomes true when the list has more than MAX_PAGES pages
 
   const loadOtherPages = async () => {
-    if (!pager) return [];
+    if (!pager) return {before: [], after: []};
     // The page number of the current page, from the address (?page=3); no number means page 1.
     const here = Number(new URL(location.href).searchParams.get('page')) || 1;
     // Items already in the list, by their link, so an item never appears twice (e.g. when an issue is updated while we
@@ -332,27 +333,35 @@
         if (!id || seen.has(id)) continue;
         seen.add(id);
         added++;
-        // Copy the row from the downloaded page into this page, hidden, and mark it as coming from another page.
-        const copy = document.importNode(row, true);
-        copy.dataset.boardOtherPage = String(n);
-        copy.style.display = 'none';
-        (n < here ? before : after).push(copy);
+        // Keep the row in the downloaded page for now, marked as coming from another page. It only enters this page when
+        // a status filter needs it (see place() below). Hundreds of hidden rows in the page made it slow: browser
+        // extensions (ad blockers, password managers ...) inspect every element that is added to a page.
+        row.dataset.boardOtherPage = String(n);
+        (n < here ? before : after).push(row);
       }
       // A page after the current one that brings nothing new means we have passed the end of the list. (Gitea answers a
       // page number beyond the last page with the last page again, so "nothing new" is the reliable end signal.)
       if (n > here && !added) break;
     }
-    // Put the rows in Gitea's order: earlier pages before the current page's rows, later pages after them.
-    const first = original[0] || null;
-    for (const row of before) list.insertBefore(row, first);
-    for (const row of after) list.append(row);
-    return [...before, ...after];
+    return {before, after};
+  };
+
+  // Put a row of another page into this page, at its place in Gitea's order, the first time it has to be shown.
+  // "order" is every row of the whole list in Gitea's order. adoptNode moves the row itself (not a copy) into this page,
+  // so what decorate() stored on it, the badges and item.boardColumns, comes along.
+  const place = (item, order) => {
+    // (Not isConnected: a row inside the downloaded page counts as connected too, to that page.)
+    if (item.parentNode === list) return;
+    document.adoptNode(item);
+    const i = order.indexOf(item);
+    const next = order.slice(i + 1).find((r) => r.parentNode === list);
+    if (next) list.insertBefore(item, next); else list.append(item);
   };
 
   // ---------------------------------------------------------------------------------------------------------------------
   // d. The "Status" dropdown, built once everything is loaded.
   // ---------------------------------------------------------------------------------------------------------------------
-  // all = every row: the ones of this page plus the ones of the other pages.
+  // all = every row of the whole list, in Gitea's order: the ones of this page plus the ones of the other pages.
   const filterDropdown = (all) => {
     // None of the repositories in this list has a board: a status filter would be meaningless, so show nothing.
     if (!columns.size) return;
@@ -459,9 +468,11 @@
       // Which rows to show (display '' = normal, 'none' = hidden):
       //   - no filter: only the rows Gitea put on this page, exactly as Gitea shows them;
       //   - a filter:  every row of the whole list, from any page, that is in the chosen column.
+      // Rows of other pages that are not needed stay out of this page (see loadOtherPages).
       for (const item of all) {
         const show = value ? item.boardColumns.includes(value) : !item.dataset.boardOtherPage;
-        item.style.display = show ? '' : 'none';
+        if (show) place(item, all);
+        if (item.parentNode === list) item.style.display = show ? '' : 'none';
       }
       // Gitea's page buttons only make sense for Gitea's own pages; with a filter they would be misleading.
       if (pager) pager.style.display = value ? 'none' : '';
@@ -495,11 +506,11 @@
   // An error is written to the browser console and never shown to the user: at worst some badges are missing, or the
   // filter only covers the current page.
   const others = loadOtherPages()
-    .then((rows) => Promise.all(rows.map((row) => decorate(row).catch((e) => console.warn('board column badge:', e))))
-      .then(() => rows))
-    .catch((e) => { console.warn('board column pages:', e); return []; });
+    .then((pages) => Promise.all([...pages.before, ...pages.after]
+      .map((row) => decorate(row).catch((e) => console.warn('board column badge:', e)))).then(() => pages))
+    .catch((e) => { console.warn('board column pages:', e); return {before: [], after: []}; });
   Promise.all([others, ...current])
-    .then(([rows]) => filterDropdown([...original, ...rows]))
+    .then(([{before, after}]) => filterDropdown([...before, ...original, ...after]))
     .catch((e) => console.warn('board column filter:', e));
 })();
 </script>

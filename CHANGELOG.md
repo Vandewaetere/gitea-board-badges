@@ -3,6 +3,13 @@
 Every release is a tag `vX.Y.Z` with a section `## [X.Y.Z]` here; the release on GitHub gets that section as its notes
 and `footer.tmpl` as its download. The version is also at the top of `footer.tmpl`.
 
+## [1.1.2] - 2026-11-05
+
+### Fixed
+- Long issue lists no longer make Gitea slow, which was most noticeable in Safari. The items of the other pages used to
+  be added to the page as hidden rows right away; with many pages that meant hundreds of extra rows for the browser and
+  its extensions to go through. They now stay out of the page until a *Status* filter needs them.
+
 ## [1.1.1] - 2026-10-28
 
 ### Fixed
