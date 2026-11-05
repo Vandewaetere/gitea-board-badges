@@ -15,25 +15,32 @@
 // Next to that, organisation "acme" has repositories "web" and "api" (issues #1 and #2 each) on one organisation board:
 //   web#1 "web First" -> To Do, api#2 "api Second" -> In Progress, web#2 and api#1 on no board.
 //
-// This script drives a real Chromium browser like a person would: it logs in, opens pages, clicks the dropdown, and then
+// This script drives a real browser like a person would: it logs in, opens pages, clicks the dropdown, and then
 // checks what is visible on the screen. Every check prints one line starting with "ok" or "FAIL". At the end the script
 // exits with 0 when everything passed and 1 when anything failed, which test.sh passes on as its own result.
 //
 // The test user has Gitea's default language (English), so the script's English texts are expected ("All",
-// "No board" ...). At the end the test switches the user to Dutch and checks the Dutch texts once.
+// "No board" ...). At the end the test switches the user to Dutch, checks the Dutch texts once and switches back.
+//
+// test.sh runs this script twice: in Chromium (Chrome, Edge ...) and in WebKit (the engine of Safari). BROWSER says
+// which one. The screenshots for the README are taken in Chromium only.
 // =========================================================================================================================
-import { chromium } from 'playwright';
+import { chromium, webkit } from 'playwright';
 
 // Address of the test Gitea, passed in by test.sh (e.g. http://gbb_gitea_1234:3000).
 const BASE = process.env.BASE;
+// The browser to test in: "chromium" (default) or "webkit".
+const BROWSER = process.env.BROWSER || 'chromium';
 
 // The expected badge per issue title; null = no badge expected. These are checked on every page of the list together
 // (2 issues per page; /issues also has the 4 issues of the organisation, so 4 pages).
 const expected = {'First issue': 'To Do', 'Second issue': 'In Progress', 'Third issue': 'Done', 'Not on a board': null};
 
 // Start a browser with a fixed window size, so the screenshots always look the same.
-const browser = await chromium.launch();
+const browser = await {chromium, webkit}[BROWSER].launch();
 const page = await browser.newPage({viewport: {width: 1100, height: 650}});
+// A screenshot for the README, only in Chromium, so both runs do not overwrite each other's pictures.
+const shot = (path) => BROWSER === 'chromium' ? page.screenshot({path}) : null;
 
 // Log in as the test user through Gitea's normal login form, just like a person. (The password is throwaway test data
 // of the temporary test Gitea started by test.sh; it exists nowhere else.) The script under test uses the browser
@@ -52,7 +59,7 @@ let failed = 0;
 await page.setViewportSize({width: 1280, height: 520});
 await page.goto(`${BASE}/tester/demo/projects/1`);
 await page.waitForLoadState('load');
-await page.screenshot({path: '/out/board.png'});
+await shot('/out/board.png');
 await page.setViewportSize({width: 1100, height: 650});
 
 // -------------------------------------------------------------------------------------------------------------------------
@@ -100,7 +107,7 @@ for (const [path, name] of [['/tester/demo/issues', 'repo'], ['/issues', 'dashbo
   }
 
   // Screenshot for the README and for a visual check by a person (test/out/repo.png and test/out/dashboard.png).
-  await page.screenshot({path: `/out/${name}.png`});
+  await shot(`/out/${name}.png`);
 
   // The other pages of the same list, for the badges of the other issues. (A page number beyond the last page gives
   // the last page again, which does no harm here.)
@@ -184,7 +191,7 @@ console.log('dropdown in filter bar:', await page.$eval('.board-column-filter', 
 await page.click('.board-column-filter');
 console.log('items:', (await page.$$eval('.board-column-filter-item', (b) => b.map((x) => x.textContent.trim().replace(/\s+/g, ' ')))).join(' | '));
 await page.waitForTimeout(300);   // let the opening animation finish
-await page.screenshot({path: '/out/filter-open.png'});   // the open dropdown, used in the README
+await shot('/out/filter-open.png');   // the open dropdown, used in the README
 
 // Without a filter: exactly Gitea's own page 1, with Gitea's page buttons.
 await page.keyboard.press('Escape');
@@ -197,7 +204,7 @@ await click('To Do');
 await check('To Do (on page 2)', ['First issue']);
 await checkPager('with filter', false);
 console.log('label:', await page.$eval('.board-column-filter > .text', (t) => t.textContent));   // button now says "To Do"
-await page.screenshot({path: '/out/filter.png'});
+await shot('/out/filter.png');
 
 // Reload the page: the filter comes from the address, so it must still be active.
 await page.reload();
@@ -207,7 +214,7 @@ await check('To Do after reload', ['First issue']);
 // "No board": only the issue that is on no board.
 await click('No board');
 await check('No board', ['Not on a board']);
-await page.screenshot({path: '/out/filter-noboard.png'});
+await shot('/out/filter-noboard.png');
 
 // First another column, then "All": back to Gitea's own page 1 with its page buttons, and the "#..." part removed
 // from the address.
@@ -226,7 +233,7 @@ await check('page 2 with #status=Done', ['Third issue']);
 await page.goto(`${BASE}/issues#status=In%20Progress`);
 await page.waitForSelector('.board-column-filter', {timeout: 10000}).catch(() => {});
 await check('/issues with #status=In Progress', ['Second issue', 'api Second']);
-await page.screenshot({path: '/out/dashboard-filter.png'});
+await shot('/out/dashboard-filter.png');
 console.log('label:', await page.$eval('.board-column-filter > .text', (t) => t.textContent));
 
 // An old link from an earlier version, when the dropdown was called "Kolom" (#kolom=...): must still work, and is rewritten to #status=.
@@ -263,7 +270,7 @@ for (const [repo, want] of [['web', {'web First': 'To Do', 'web Second': null}],
   const ok = href === '/acme/-/projects/2';
   if (!ok) failed++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} org board: badge links to ${href}`);
-  if (repo === 'web') await page.screenshot({path: '/out/org.png'});
+  if (repo === 'web') await shot('/out/org.png');
 }
 // The status filter also works with an organisation board.
 await page.goto(`${BASE}/acme/web/issues#status=No%20board`);
@@ -291,8 +298,13 @@ await page.waitForSelector('.board-column-filter', {timeout: 10000}).catch(() =>
   // Screenshot of the open Dutch dropdown, for the README.
   await page.click('.board-column-filter');
   await page.waitForTimeout(300);
-  await page.screenshot({path: '/out/filter-open-nl.png'});
+  await shot('/out/filter-open-nl.png');
 }
+// Back to English, so the next run (in the other browser) starts the same way.
+await page.evaluate(async () => {
+  const body = new URLSearchParams({_csrf: window.config.csrfToken, language: 'en-US'});
+  await fetch('/user/settings/appearance/language', {method: 'POST', body});
+});
 
 // -------------------------------------------------------------------------------------------------------------------------
 // Result

@@ -1,4 +1,4 @@
-# Runs the end-to-end test (test/test.sh): a throwaway Gitea in Docker, test data, and checks in a real Chromium.
+# Runs the end-to-end test (test/test.sh): a throwaway Gitea in Docker, test data, and checks in a real Chromium and WebKit.
 # On every push to main and every pull request, and by hand (Actions -> Test -> Run workflow), e.g. to check a new
 # gitea/gitea:latest before upgrading. The screenshots of the run are kept as an artifact named "screenshots".
 name: Test

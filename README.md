@@ -115,7 +115,7 @@ test/test.sh                                   # with gitea/gitea:latest
 GITEA_IMAGE=gitea/gitea:<version> test/test.sh  # with another version, e.g. before upgrading
 ```
 
-Needs Docker. The script starts a throwaway Gitea with `footer.tmpl` (set to 2 issues per page, so the list has two pages), creates a repository with four issues and a board (three issues in To Do, In Progress and Done, one on no board), plus an organisation with two repositories that share one organisation board (with the same issue numbers), and checks in Chromium (the official Playwright image) that:
+Needs Docker. The script starts a throwaway Gitea with `footer.tmpl` (set to 2 issues per page, so the list has two pages), creates a repository with four issues and a board (three issues in To Do, In Progress and Done, one on no board), plus an organisation with two repositories that share one organisation board (with the same issue numbers), and checks in Chromium and in WebKit, the engine of Safari (both from the official Playwright image), that:
 
 - every issue gets the right badge, in the repository list and in `/issues`;
 - organisation boards give badges too, only to the issues of the right repository;
@@ -123,7 +123,7 @@ Needs Docker. The script starts a throwaway Gitea with `footer.tmpl` (set to 2 i
 - the Status dropdown sits next to Project and filters the whole list (also issues on the other page), hides the page buttons while filtering, survives a reload, and works from a link with `#status=`;
 - the texts are Dutch for a user who chose Dutch in Gitea.
 
-Screenshots land in `test/out/`. Everything is removed afterwards.
+Screenshots (from Chromium) land in `test/out/`. Everything is removed afterwards.
 
 ## Releasing
 

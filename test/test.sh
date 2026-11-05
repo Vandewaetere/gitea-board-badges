@@ -15,7 +15,8 @@
 #   2. Fill it with test data through Gitea's API: one user, one private repository with four issues, one board with the
 #      columns To Do / In Progress / Done, and three of the four issues placed on that board. Next to that an
 #      organisation with two repositories that share one organisation board, with overlapping issue numbers.
-#   3. Open the issue lists in Chromium (Microsoft's official Playwright image) and check the result (test/browser.mjs).
+#   3. Open the issue lists in Chromium and in WebKit (the engine of Safari), both from Microsoft's official Playwright
+#      image, and check the result (test/browser.mjs).
 #   4. Remove everything again, also when the test fails halfway.
 #   Nothing touches any other Gitea: the test Gitea runs on its own private Docker network.
 #
@@ -38,7 +39,7 @@ export PATH=$PATH:/snap/bin
 
 # DIR   = the root of this repository (the folder above test/), wherever the script is started from.
 # IMAGE = the Gitea image to test with; can be overridden with the GITEA_IMAGE environment variable.
-# PW    = the official Playwright image (Node.js + Chromium) that runs the browser part.
+# PW    = the official Playwright image (Node.js + Chromium + WebKit) that runs the browser part.
 DIR=$(cd "$(dirname "$0")/.." && pwd)
 IMAGE=${GITEA_IMAGE:-gitea/gitea:latest}
 PW=mcr.microsoft.com/playwright:v1.56.0-noble
@@ -156,9 +157,11 @@ EOF
 # 3. Check the result in a real browser.
 # --------------------------------------------------------------------------------------------------------------------------
 # Start the Playwright container on the same private network, so it can reach the test Gitea by its name. It installs the
-# Playwright library (same version as the image), copies browser.mjs and runs it. BASE tells browser.mjs where Gitea is;
-# test/out is mounted as /out for the screenshots. The exit code of browser.mjs becomes the exit code of this script.
+# Playwright library (same version as the image), copies browser.mjs and runs it, once in Chromium and once in WebKit.
+# BASE tells browser.mjs where Gitea is, BROWSER which browser to use; test/out is mounted as /out for the screenshots.
+# Both runs always happen; the script fails when either of them failed.
 docker run --rm --network "$NET" -e BASE="http://$NAME:3000" -v "$WORK:/work" -v "$DIR/test/out:/out" "$PW" \
-  sh -c 'cd /tmp && npm i -s playwright@1.56.0 >/dev/null 2>&1 && cp /work/browser.mjs . && node browser.mjs'
+  sh -c 'cd /tmp && npm i -s playwright@1.56.0 >/dev/null 2>&1 && cp /work/browser.mjs . && f=0 &&
+    for b in chromium webkit; do echo "== $b"; BROWSER=$b node browser.mjs || f=1; done; exit $f'
 
 # 4. Clean-up happens automatically here, through the "trap cleanup EXIT" above.
