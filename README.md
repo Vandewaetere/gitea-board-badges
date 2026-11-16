@@ -8,7 +8,7 @@
 Gitea's project boards (kanban: To Do, In Progress, Done …) are great, but the issue list does not tell you where an issue is on the board, and you cannot filter issues by board column. This adds:
 
 - **Badges:** a coloured label with the column name next to every issue on a board, in the colour of that column. Click it to open the board.
-- **Status filter:** a *Status* dropdown in Gitea's own filter bar, next to Label, Milestone and Project. Pick a column (or *No board*) and you see every matching issue of the **whole list**, across all pages.
+- **Status filter:** a *Status* dropdown in Gitea's own filter bar, next to Label, Milestone and Project. Pick a column (or *No board*) and you see every matching issue of the **whole list**, across all pages. Alt-click (Option-click on a Mac) a column to exclude it instead, like in Gitea's own Label filter.
 
 It is a single Gitea template file with a small script: no plugin system, no build step, no changes to Gitea, no external requests.
 
@@ -44,7 +44,13 @@ Choosing *To Do* on page 1 shows *First issue*, which Gitea lists on page 2. The
 
 ![List filtered on No board](test/out/filter-noboard.png)
 
-### 6. The global /issues overview
+### 6. Exclude a status
+
+Alt-click (Option-click on a Mac) a status to see everything except that status, for example everything that is not *Done*. You can exclude several; Alt-click an excluded status again to bring it back. The address then ends in `#status=-Done`.
+
+![Open Status dropdown with Done struck through and the list without the Done issue](test/out/filter-exclude.png)
+
+### 7. The global /issues overview
 
 Badges and the filter also work on `/issues`, across all your repositories.
 
@@ -52,13 +58,13 @@ Badges and the filter also work on `/issues`, across all your repositories.
 
 ![Global issues overview filtered on In Progress](test/out/dashboard-filter.png)
 
-### 7. Organisation boards
+### 8. Organisation boards
 
 Boards of an organisation (or user), under `/{owner}/-/projects`, work too, also when one board holds the issues of several repositories. Each repository only gets the badges of its own issues.
 
 ![Issue list of an organisation repository with a badge from the organisation board](test/out/org.png)
 
-### 8. In your language
+### 9. In your language
 
 The texts follow the language chosen in Gitea. English and Dutch are included; here in Dutch.
 
@@ -71,7 +77,7 @@ All screenshots are made automatically by the end-to-end test (`test/test.sh`), 
 - Works on the issue and pull request lists of a repository and on the global `/issues` overview.
 - Reads the project boards of the repository and of its owner (organisation or user boards) with the **visitor's own login and permissions** (Gitea's API does not accept the browser session, the board pages do). It only reads; it never changes anything.
 - For the filter it also reads the other pages of the list you are looking at, with the same Gitea filters and sorting (open/closed, labels, search …). Without a status selected you see Gitea's normal page with its page buttons; with a status selected you see all matching issues and the page buttons are hidden. At most 50 pages (1,000 issues with Gitea's default page size) are read.
-- The selected status is kept in the URL (`#status=To%20Do`), so a filtered list can be bookmarked or shared.
+- The selected status is kept in the URL (`#status=To%20Do`, or `#status=-Done,-No%20board` for excluded statuses), so a filtered list can be bookmarked or shared.
 - Texts follow the language the visitor chose in Gitea: English and Dutch are included. Add a language in the `TEXTS` table at the top of the script.
 - If a Gitea update changes the page structure, the script simply adds nothing; Gitea keeps working.
 
@@ -104,7 +110,7 @@ docker compose up -d --force-recreate gitea
 
 If you already have your own `custom/footer.tmpl`, paste the contents of this file into it.
 
-Tested with Gitea 28.2.0.
+Tested with Gitea 28.3.0.
 
 ## Testing
 
@@ -121,6 +127,7 @@ Needs Docker. The script starts a throwaway Gitea with `footer.tmpl` (set to 2 i
 - organisation boards give badges too, only to the issues of the right repository;
 - exactly the other page of the list is fetched;
 - the Status dropdown sits next to Project and filters the whole list (also issues on the other page), hides the page buttons while filtering, survives a reload, and works from a link with `#status=`;
+- Alt-click excludes a status, several can be excluded, and the exclusion survives a reload;
 - the texts are Dutch for a user who chose Dutch in Gitea.
 
 Screenshots (from Chromium) land in `test/out/`. Everything is removed afterwards.
@@ -158,7 +165,7 @@ Yes. Every visitor only sees badges for boards they are allowed to see.
 Yes, since version 1.1.0: boards under `/{org}/-/projects` are read next to the repository's own boards. A board can hold issues of several repositories; each repository only gets the badges of its own issues.
 
 **Which Gitea versions are supported?**
-Tested with Gitea 28.2.0. Run `test/test.sh` with `GITEA_IMAGE=gitea/gitea:<version>` to check another version before upgrading.
+Tested with Gitea 28.3.0. Run `test/test.sh` with `GITEA_IMAGE=gitea/gitea:<version>` to check another version before upgrading.
 
 **Can I change the texts or add a language?**
 Yes, in the `TEXTS` table at the top of the script. English and Dutch are included.

@@ -223,6 +223,58 @@ await click('');
 await check('All = page 1', page1);
 await checkPager('after All', true);
 
+// Alt-click (Option-click on a Mac) excludes a status: everything of the whole list except "Done", with the page buttons
+// hidden and "-Done" in the address.
+const altClick = async (column) => {
+  await page.click('.board-column-filter');
+  await page.click(`.board-column-filter-item[data-column="${column}"]`, {modifiers: ['Alt']});
+};
+const checkHash = async (label, want) => {
+  const got = new URL(page.url()).hash;
+  const ok = got === want;
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} address ${label}: ${got || '(no hash)'} (expected ${want || '(no hash)'})`);
+};
+await altClick('Done');
+await check('without Done', ['First issue', 'Not on a board', 'Second issue']);
+await checkHash('without Done', '#status=-Done');
+await checkPager('with exclusion', false);
+console.log('label:', await page.$eval('.board-column-filter > .text', (t) => t.textContent));
+// The open dropdown with the excluded status struck through and the hint at the bottom, for the README.
+await page.click('.board-column-filter');
+await page.waitForTimeout(300);
+await shot('/out/filter-exclude.png');
+await page.keyboard.press('Escape');
+{
+  const hint = await page.$eval('.board-column-filter-hint', (h) => h.textContent).catch(() => '');
+  const ok = hint === 'Alt/Option + click to exclude a status';
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} hint: ${hint}`);
+}
+
+// A second excluded status is added to the first; both survive a reload.
+await altClick('No board');
+await check('without Done and No board', ['First issue', 'Second issue']);
+await checkHash('without Done and No board', '#status=-Done,-No%20board');
+await page.reload();
+await page.waitForSelector('.board-column-filter');
+await check('exclusion after reload', ['First issue', 'Second issue']);
+
+// Alt-click on an excluded status brings it back.
+await altClick('Done');
+await check('Done back, still without No board', ['First issue', 'Second issue', 'Third issue']);
+
+// A normal click replaces the exclusion by that one status, and "All" removes everything again.
+await click('To Do');
+await check('To Do after exclusion', ['First issue']);
+await checkHash('To Do after exclusion', '#status=To%20Do');
+await altClick('To Do');
+await check('Alt-click on the selected status excludes it', ['Not on a board', 'Second issue', 'Third issue']);
+await click('');
+await check('All after exclusion = page 1', page1);
+await checkHash('All after exclusion', '');
+await checkPager('after exclusion removed', true);
+
 // Page 2 open, filter "Done": issue #3 comes from page 1.
 await page.goto(`${BASE}/tester/demo/issues?page=2#status=Done`);
 await page.waitForSelector('.board-column-filter', {timeout: 10000}).catch(() => {});

@@ -3,6 +3,13 @@
 Every release is a tag `vX.Y.Z` with a section `## [X.Y.Z]` here; the release on GitHub gets that section as its notes
 and `footer.tmpl` as its download. The version is also at the top of `footer.tmpl`.
 
+## [1.2.0] - 2026-11-16
+
+### Added
+- Alt-click (Option-click on a Mac) on a status in the *Status* dropdown excludes it, like in Gitea's own Label filter:
+  the list shows everything except that status. Several statuses can be excluded, and Alt-click on an excluded status
+  brings it back. The exclusion is kept in the URL (`#status=-Done`).
+
 ## [1.1.2] - 2026-11-05
 
 ### Fixed

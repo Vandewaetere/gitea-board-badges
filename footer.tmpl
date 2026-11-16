@@ -1,7 +1,7 @@
 {{/*
   ==========================================================================================================================
   gitea-board-badges — footer.tmpl
-  Version 1.1.2 — https://github.com/Vandewaetere/gitea-board-badges (changes: CHANGELOG.md)
+  Version 1.2.0 — https://github.com/Vandewaetere/gitea-board-badges (changes: CHANGELOG.md)
   ==========================================================================================================================
 
   WHAT THIS DOES
@@ -14,7 +14,8 @@
        column (in the colour of that column on the board). Clicking the label opens the board.
     2. Filter: a "Status" dropdown in Gitea's filter bar (next to Label, Milestone, Project, Author ...). Choosing a
        status shows every item of the whole list that is in that column, across all pages of the list. "No board"
-       shows the items that are on no board.
+       shows the items that are on no board. Alt-click (Option-click on a Mac) on a status excludes it instead: the
+       list then shows everything except that status.
 
   It works on every page that has an issue list: the issue and pull request lists of a repository, and the global
   "/issues" overview, which can mix issues from several repositories.
@@ -54,7 +55,8 @@
     list that is open (same address, other "page=" number). That way Gitea's own filters (open/closed, labels, search
     text, sorting ...) keep applying, and the items look exactly like Gitea's. Each page is one extra request, made one
     after the other in the background; for safety at most MAX_PAGES pages are read.
-  * Filter in the URL. The chosen status is stored after the "#" in the address (e.g. ".../issues#status=To%20Do").
+  * Filter in the URL. The chosen status is stored after the "#" in the address (e.g. ".../issues#status=To%20Do";
+    excluded statuses get a "-" in front and are separated by commas, e.g. "#status=-Done,-No%20board").
     That part of the URL never goes to the server, so Gitea's own filters and paging are not affected, and a filtered
     list can be bookmarked or shared.
   * Fails quietly. If Gitea changes its HTML in an update and the script cannot find what it needs, it simply adds
@@ -109,11 +111,13 @@
   // "nl-NL"); we use the part before the "-" and fall back to English for languages that are not in this table.
   //   status: the dropdown button without a filter        all:  the entry that removes the filter
   //   none:   the entry for items that are on no board     header / headerFirst: heading at the top of the open dropdown
+  //   exclude: the hint at the bottom of the open dropdown
   const TEXTS = {
     en: {status: 'Status', all: 'All', none: 'No board', header: 'Status on the board (all pages)',
-      headerFirst: (n) => `Status on the board (first ${n} pages)`},
+      headerFirst: (n) => `Status on the board (first ${n} pages)`, exclude: 'Alt/Option + click to exclude a status'},
     nl: {status: 'Status', all: 'Alle', none: 'Geen bord', header: "Status op het bord (alle pagina's)",
-      headerFirst: (n) => `Status op het bord (eerste ${n} pagina's)`},
+      headerFirst: (n) => `Status op het bord (eerste ${n} pagina's)`,
+      exclude: 'Alt/Option + klik om een status uit te sluiten'},
   };
   const T = TEXTS[(document.documentElement.lang || 'en').split('-')[0].toLowerCase()] || TEXTS.en;
 
@@ -410,6 +414,12 @@
     // entries: filter value -> the menu entry for it. The value '' means "all" (no filter).
     const entries = new Map();
 
+    // The filter that is active now:
+    //   only    = show only the rows in this column ('' = not used)
+    //   without = hide the rows in these columns (empty = not used)
+    // At most one of the two is in use; neither means "all" (no filter).
+    let current = {only: '', without: []};
+
     // Add one entry to the menu.
     //   value = the filter value ('' for all, a column name, or NONE)
     //   text  = what the user sees
@@ -425,7 +435,15 @@
       if (n !== undefined) a.append(el('span', 'tw-ml-auto tw-text-text-light', String(n)));
       // On a normal click we apply the filter ourselves instead of following the link; preventDefault stops the browser
       // from jumping to the top of the page, which following a "#" link would do. Gitea closes the menu by itself.
-      a.addEventListener('click', (e) => { e.preventDefault(); apply(value); });
+      // With Alt (Option on a Mac) held down the click excludes this status instead, or brings it back when it was
+      // excluded already, the same way Gitea's own Label filter works.
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (!e.altKey || !value) return apply({only: value, without: []});
+        const without = current.without.includes(value) ? current.without.filter((v) => v !== value)
+          : [...current.without, value];
+        apply({only: '', without});
+      });
       entries.set(value, a);
       menu.append(a);
     };
@@ -435,6 +453,11 @@
     menu.append(el('div', 'divider'));
     for (const [c, {color}] of columns) entry(c, c, color, count(c));
     entry(NONE, NONE, null, count(NONE));
+    // Hint at the bottom, like the one in Gitea's Label filter.
+    menu.append(el('div', 'divider'));
+    const hint = el('div', 'board-column-filter-hint tw-text-text-light', T.exclude);
+    Object.assign(hint.style, {padding: '4px 16px 8px', fontSize: '12px', whiteSpace: 'nowrap'});
+    menu.append(hint);
 
     // Where to put the dropdown:
     //   - repository lists have Gitea's "Project" dropdown: put ours right after it;
@@ -450,45 +473,73 @@
       list.before(row);
     }
 
-    // Read the current filter from the address, e.g. "#status=To%20Do" -> "To Do". Returns '' when there is none.
+    // Read the current filter from the address. Returns it in the form of "current" above:
+    //   "#status=To%20Do"            -> only "To Do"
+    //   "#status=-Done,-No%20board"  -> without "Done" and "No board"
+    //   no "#status=" at all         -> no filter
     // "#kolom=" is the older name of the same setting (the dropdown used to be called "Kolom"); links that people saved
-    // with it keep working.
-    const fromAddress = () => decodeURIComponent((location.hash.match(/^#(?:status|kolom)=(.*)$/) || [])[1] || '');
+    // with it keep working. A column name in the address that does not exist in this list (e.g. an old link) is ignored.
+    const fromAddress = () => {
+      const raw = (location.hash.match(/^#(?:status|kolom)=(.*)$/) || [])[1] || '';
+      // A column whose own name starts with "-" is still found here, before the "-" is read as "exclude".
+      const whole = decodeURIComponent(raw);
+      if (entries.has(whole)) return {only: whole, without: []};
+      const parts = raw.split(',').map(decodeURIComponent);
+      if (!parts.every((p) => p.startsWith('-'))) return {only: '', without: []};
+      return {only: '', without: parts.map((p) => p.slice(1))};
+    };
 
-    // Apply a filter value: show/hide rows and Gitea's page buttons, mark the chosen entry, update the button text and
+    // Apply a filter: show/hide rows and Gitea's page buttons, mark the entries in the menu, update the button text and
     // the address.
-    const apply = (value) => {
-      // A column name in the address that does not exist in this list (e.g. an old link): show everything.
-      if (value && !entries.has(value)) value = '';
+    const apply = ({only, without}) => {
+      // Excluded columns in the order of the menu and without unknown names, so the same choice always gives the same
+      // address.
+      without = [...entries.keys()].filter((v) => v && without.includes(v));
+      current = {only, without};
+      const active = !!only || without.length > 0;
 
       // Write the choice into the address without reloading the page and without adding a "back" step to the browser
       // history. Without a filter the "#..." part is removed completely.
-      history.replaceState(null, '', value ? `#status=${encodeURIComponent(value)}` : location.pathname + location.search);
+      const hash = only ? encodeURIComponent(only) : without.map((v) => '-' + encodeURIComponent(v)).join(',');
+      history.replaceState(null, '', active ? `#status=${hash}` : location.pathname + location.search);
 
       // Which rows to show (display '' = normal, 'none' = hidden):
       //   - no filter: only the rows Gitea put on this page, exactly as Gitea shows them;
-      //   - a filter:  every row of the whole list, from any page, that is in the chosen column.
+      //   - only:      every row of the whole list, from any page, that is in the chosen column;
+      //   - without:   every row of the whole list, from any page, that is in none of the excluded columns.
       // Rows of other pages that are not needed stay out of this page (see loadOtherPages).
       for (const item of all) {
-        const show = value ? item.boardColumns.includes(value) : !item.dataset.boardOtherPage;
+        const show = only ? item.boardColumns.includes(only)
+          : without.length ? !item.boardColumns.some((c) => without.includes(c))
+          : !item.dataset.boardOtherPage;
         if (show) place(item, all);
         if (item.parentNode === list) item.style.display = show ? '' : 'none';
       }
       // Gitea's page buttons only make sense for Gitea's own pages; with a filter they would be misleading.
-      if (pager) pager.style.display = value ? 'none' : '';
+      if (pager) pager.style.display = active ? 'none' : '';
 
-      // Mark the chosen entry in the menu, the same way Gitea marks the chosen entry in its own filters.
-      for (const [v, a] of entries) a.classList.toggle('selected', v === value);
-
-      // Button text: "Status" without a filter; with a filter the coloured dot plus the column name, in bold.
-      label.replaceChildren();
-      if (value) {
-        const d = dot(value === NONE ? null : columns.get(value)?.color);
-        d.style.marginRight = '4px';
-        label.append(d);
+      // Mark the chosen entry in the menu, the same way Gitea marks the chosen entry in its own filters. Excluded
+      // entries get their name struck through.
+      for (const [v, a] of entries) {
+        a.classList.toggle('selected', !without.length && v === only);
+        a.classList.toggle('board-column-excluded', without.includes(v));
+        a.querySelector('.gt-ellipsis').style.textDecoration = without.includes(v) ? 'line-through' : '';
       }
-      label.append(value ? value : T.status);
-      label.style.fontWeight = value ? '600' : '';
+
+      // Button text: "Status" without a filter; with a filter the coloured dot plus the column name, in bold. Excluded
+      // columns are listed one after the other, struck through.
+      label.replaceChildren();
+      const chosen = only ? [only] : without;
+      chosen.forEach((v, i) => {
+        if (i) label.append(', ');
+        const d = dot(v === NONE ? null : columns.get(v)?.color);
+        d.style.marginRight = '4px';
+        const name = el('span', '', v);
+        if (!only) name.style.textDecoration = 'line-through';
+        label.append(d, name);
+      });
+      if (!active) label.append(T.status);
+      label.style.fontWeight = active ? '600' : '';
     };
 
     // If the user changes the "#..." part by hand, or uses the back button to it, apply that filter too.
